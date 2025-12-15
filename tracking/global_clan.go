@@ -393,6 +393,7 @@ func (c *ClanTracking) getClans(tags []string) {
 
 			sem <- struct{}{}
 			defer func() { <-sem }() // release
+
 			newClan := getClan(t)
 
 			c.results <- Result{
@@ -453,10 +454,21 @@ func (c *ClanTracking) handleResults() {
 			return
 		}
 		flushStarted := time.Now()
-		_, err := clans.BulkWrite(ctx, clansWrite, options.BulkWrite().SetOrdered(false))
-		_, err = clanChanges.BulkWrite(ctx, clanChangesWrite, options.BulkWrite().SetOrdered(false))
-		_, err = joinLeave.BulkWrite(ctx, joinLeaveWrite, options.BulkWrite().SetOrdered(false))
-		_, err = playerStats.BulkWrite(ctx, playerStatsWrite, options.BulkWrite().SetOrdered(false))
+
+		var err error
+		if len(clansWrite) > 0 {
+			_, err = clans.BulkWrite(ctx, clansWrite, options.BulkWrite().SetOrdered(false))
+		}
+		if len(clanChangesWrite) > 0 {
+			_, err = clanChanges.BulkWrite(ctx, clanChangesWrite, options.BulkWrite().SetOrdered(false))
+
+		}
+		if len(joinLeaveWrite) > 0 {
+			_, err = joinLeave.BulkWrite(ctx, joinLeaveWrite, options.BulkWrite().SetOrdered(false))
+		}
+		if len(playerStatsWrite) > 0 {
+			_, err = playerStats.BulkWrite(ctx, playerStatsWrite, options.BulkWrite().SetOrdered(false))
+		}
 
 		if err != nil {
 			fmt.Println("mongo bulkwrite error:", err)
@@ -496,7 +508,7 @@ func (c *ClanTracking) handleResults() {
 				doc := bson.M{
 					"type": "join",
 					"clan": clanTag,
-					"time": nowUnix,
+					"time": time.Now().UTC(),
 					"tag":  tag,
 					"name": member.Name,
 					"th":   member.TownHallLevel,
@@ -511,7 +523,7 @@ func (c *ClanTracking) handleResults() {
 				doc := bson.M{
 					"type": "leave",
 					"clan": clanTag,
-					"time": nowUnix,
+					"time": time.Now().UTC(),
 					"tag":  tag,
 					"name": member.Name,
 					"th":   member.TownHallLevel,
