@@ -305,7 +305,7 @@ func (c *ClanTracking) getClanTags() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer cur.Close(context.TODO())
+	defer func() { _ = cur.Close(context.TODO()) }()
 
 	tags := make([]string, 0, 1500000)
 	for cur.Next(context.TODO()) {
@@ -331,6 +331,9 @@ func (c *ClanTracking) getClans(tags []string) {
 		}
 	}
 
+	limiter := time.NewTicker(time.Second / 1000)
+	defer limiter.Stop()
+
 	coll := c.statsMongoClient.Database("looper").Collection("all_clans")
 	cursor, err := coll.Find(context.TODO(), bson.D{{"tag", bson.D{{"$in", tags}}}})
 
@@ -347,6 +350,7 @@ func (c *ClanTracking) getClans(tags []string) {
 
 	getClan := func(tag string) Clan {
 		c.waitForAPI()
+		<-limiter.C
 		escapedTag := url.QueryEscape(tag)
 		reqURL := c.baseUrl + "/clans/" + escapedTag
 		res, err := c.httpClient.Get(reqURL)
@@ -389,7 +393,6 @@ func (c *ClanTracking) getClans(tags []string) {
 
 			sem <- struct{}{}
 			defer func() { <-sem }() // release
-
 			newClan := getClan(t)
 
 			c.results <- Result{
