@@ -298,13 +298,6 @@ func clanDiff(oldClan, newClan Clan) bson.M {
 
 func (c *ClanTracking) getClans(tags []string) {
 
-	//if we end up with a queue as large as the batch size, wait for it to clear
-	if len(c.results) >= c.batchSize*2 {
-		for len(c.results) >= 100 {
-			fmt.Println("waiting for queue to clear")
-			time.Sleep(1 * time.Second)
-		}
-	}
 	limiter := time.NewTicker(time.Second / 1000)
 	defer limiter.Stop()
 
@@ -413,7 +406,9 @@ func (c *ClanTracking) handleResults() {
 	playerStats := db.Collection("player_stats")
 
 	const maxBatch = 1000
-	ctx := context.TODO()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	clansWrite := make([]mongo.WriteModel, 0, 1250)
 	clanChangesWrite := make([]mongo.WriteModel, 0, 1250)
 	joinLeaveWrite := make([]mongo.WriteModel, 0, 1250)
@@ -661,7 +656,7 @@ func RunGlobalClan() {
 				ForceAttemptHTTP2: true,
 			},
 		},
-		results:  make(chan Result, 15000),
+		results:  make(chan Result, 500),
 		priority: Priority{},
 	}
 	tracking.apiPauseCond = sync.NewCond(&tracking.apiPauseMu)
