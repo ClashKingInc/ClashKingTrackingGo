@@ -406,8 +406,6 @@ func (c *ClanTracking) handleResults() {
 	playerStats := db.Collection("player_stats")
 
 	const maxBatch = 1000
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
 
 	clansWrite := make([]mongo.WriteModel, 0, 1250)
 	clanChangesWrite := make([]mongo.WriteModel, 0, 1250)
@@ -422,19 +420,27 @@ func (c *ClanTracking) handleResults() {
 	flush := func() {
 		var err error
 		if len(clansWrite) >= maxBatch {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			_, err = clans.BulkWrite(ctx, clansWrite, options.BulkWrite().SetOrdered(false))
+			cancel()
 			clansWrite = clansWrite[:0]
 		}
 		if len(clanChangesWrite) >= maxBatch {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			_, err = clanChanges.BulkWrite(ctx, clanChangesWrite, options.BulkWrite().SetOrdered(false))
+			cancel()
 			clanChangesWrite = clanChangesWrite[:0]
 		}
 		if len(joinLeaveWrite) >= maxBatch {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			_, err = joinLeave.BulkWrite(ctx, joinLeaveWrite, options.BulkWrite().SetOrdered(false))
+			cancel()
 			joinLeaveWrite = joinLeaveWrite[:0]
 		}
 		if len(playerStatsWrite) >= maxBatch {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			_, err = playerStats.BulkWrite(ctx, playerStatsWrite, options.BulkWrite().SetOrdered(false))
+			cancel()
 			playerStatsWrite = playerStatsWrite[:0]
 		}
 		if err != nil {
