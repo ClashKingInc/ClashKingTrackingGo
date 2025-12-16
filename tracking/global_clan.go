@@ -332,8 +332,6 @@ func (c *ClanTracking) getClans(tags []string) {
 		_ = cursor.Close(context.TODO())
 	}()
 
-	sem := make(chan struct{}, 50)
-
 	getClan := func(tag string) Clan {
 		c.waitForAPI()
 		<-limiter.C
@@ -373,12 +371,9 @@ func (c *ClanTracking) getClans(tags []string) {
 		found[tag] = true
 		docCopy := doc
 
-		sem <- struct{}{}
 		wg.Add(1)
 		go func(d Clan, r Records, t string) {
 			defer wg.Done()
-
-			defer func() { <-sem }() // release
 
 			newClan := getClan(t)
 
@@ -397,11 +392,9 @@ func (c *ClanTracking) getClans(tags []string) {
 
 		tagCopy := tag
 
-		sem <- struct{}{}
 		wg.Add(1)
 		go func(t string) {
 			defer wg.Done()
-			defer func() { <-sem }()
 
 			newClan := getClan(t)
 
