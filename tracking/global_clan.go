@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	load    = godotenv.Load()
+	_       = godotenv.Load()
 	baseURL = os.Getenv("PROXY_URL")
 )
 
@@ -638,7 +638,7 @@ func RunGlobalClan() {
 		statsMongoClient:  createMongoClient(os.Getenv("STATS_MONGODB_URI")),
 		staticMongoClient: createMongoClient(os.Getenv("STATIC_MONGODB_URI")),
 		baseUrl:           baseURL,
-		batchSize:         5000,
+		batchSize:         2500,
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 			Transport: &http.Transport{
