@@ -275,24 +275,43 @@ func (c *ClanTracking) priorityClansAndPlayers() Priority {
 }
 
 func clanDiff(oldClan, newClan Clan) bson.M {
-	toSet := bson.M{}
+	var toSet bson.M
+
 	t := reflect.TypeOf(newClan)
 	ov := reflect.ValueOf(oldClan)
 	nv := reflect.ValueOf(newClan)
+
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
+
 		bsonTag := f.Tag.Get("bson")
 		if bsonTag == "" || bsonTag == "-" {
 			continue
 		}
-		key := strings.Split(bsonTag, ",")[0]
+
+		key, _, _ := strings.Cut(bsonTag, ",")
 		if key == "" || key == "-" {
 			continue
 		}
-		if !reflect.DeepEqual(ov.Field(i).Interface(), nv.Field(i).Interface()) {
-			toSet["data."+key] = nv.Field(i).Interface()
+
+		of := ov.Field(i)
+		nf := nv.Field(i)
+
+		changed := false
+		if f.Type.Comparable() {
+			changed = !of.Equal(nf)
+		} else {
+			changed = !reflect.DeepEqual(of.Interface(), nf.Interface())
+		}
+
+		if changed {
+			if toSet == nil {
+				toSet = bson.M{}
+			}
+			toSet["data."+key] = nf.Interface()
 		}
 	}
+
 	return toSet
 }
 
@@ -313,7 +332,7 @@ func (c *ClanTracking) getClans(tags []string) {
 		_ = cursor.Close(context.TODO())
 	}()
 
-	sem := make(chan struct{}, 100)
+	sem := make(chan struct{}, 50)
 
 	getClan := func(tag string) Clan {
 		c.waitForAPI()
@@ -354,11 +373,11 @@ func (c *ClanTracking) getClans(tags []string) {
 		found[tag] = true
 		docCopy := doc
 
+		sem <- struct{}{}
 		wg.Add(1)
 		go func(d Clan, r Records, t string) {
 			defer wg.Done()
 
-			sem <- struct{}{}
 			defer func() { <-sem }() // release
 
 			newClan := getClan(t)
@@ -378,11 +397,10 @@ func (c *ClanTracking) getClans(tags []string) {
 
 		tagCopy := tag
 
+		sem <- struct{}{}
 		wg.Add(1)
 		go func(t string) {
 			defer wg.Done()
-
-			sem <- struct{}{}
 			defer func() { <-sem }()
 
 			newClan := getClan(t)
@@ -405,12 +423,12 @@ func (c *ClanTracking) handleResults() {
 	joinLeave := db.Collection("join_leave_history")
 	playerStats := db.Collection("player_stats")
 
-	const maxBatch = 1000
+	const maxBatch = 500
 
-	clansWrite := make([]mongo.WriteModel, 0, 1250)
-	clanChangesWrite := make([]mongo.WriteModel, 0, 1250)
-	joinLeaveWrite := make([]mongo.WriteModel, 0, 1250)
-	playerStatsWrite := make([]mongo.WriteModel, 0, 1250)
+	clansWrite := make([]mongo.WriteModel, 0, 750)
+	clanChangesWrite := make([]mongo.WriteModel, 0, 750)
+	joinLeaveWrite := make([]mongo.WriteModel, 0, 750)
+	playerStatsWrite := make([]mongo.WriteModel, 0, 750)
 
 	// do real season logic
 	season := time.Now().UTC().Format("2006-01")
