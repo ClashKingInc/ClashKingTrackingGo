@@ -355,7 +355,7 @@ func (c *ClanTracking) getClans(tags []string) {
 		docCopy := doc
 
 		wg.Add(1)
-		go func(doc *ClanDoc, t string) {
+		go func(d Clan, r Records, t string) {
 			defer wg.Done()
 
 			sem <- struct{}{}
@@ -364,11 +364,11 @@ func (c *ClanTracking) getClans(tags []string) {
 			newClan := getClan(t)
 
 			c.results <- Result{
-				OldClan:    &docCopy.Data,
-				OldRecords: &docCopy.Records,
+				OldClan:    &d,
+				OldRecords: &r,
 				NewClan:    &newClan,
 			}
-		}(doc, tag)
+		}(docCopy.Data, docCopy.Records, tag)
 	}
 
 	for _, tag := range tags {
