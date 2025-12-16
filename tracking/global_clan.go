@@ -275,43 +275,24 @@ func (c *ClanTracking) priorityClansAndPlayers() Priority {
 }
 
 func clanDiff(oldClan, newClan Clan) bson.M {
-	var toSet bson.M
-
+	toSet := bson.M{}
 	t := reflect.TypeOf(newClan)
 	ov := reflect.ValueOf(oldClan)
 	nv := reflect.ValueOf(newClan)
-
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-
 		bsonTag := f.Tag.Get("bson")
 		if bsonTag == "" || bsonTag == "-" {
 			continue
 		}
-
-		key, _, _ := strings.Cut(bsonTag, ",")
+		key := strings.Split(bsonTag, ",")[0]
 		if key == "" || key == "-" {
 			continue
 		}
-
-		of := ov.Field(i)
-		nf := nv.Field(i)
-
-		changed := false
-		if f.Type.Comparable() {
-			changed = !of.Equal(nf)
-		} else {
-			changed = !reflect.DeepEqual(of.Interface(), nf.Interface())
-		}
-
-		if changed {
-			if toSet == nil {
-				toSet = bson.M{}
-			}
-			toSet["data."+key] = nf.Interface()
+		if !reflect.DeepEqual(ov.Field(i).Interface(), nv.Field(i).Interface()) {
+			toSet["data."+key] = nv.Field(i).Interface()
 		}
 	}
-
 	return toSet
 }
 
