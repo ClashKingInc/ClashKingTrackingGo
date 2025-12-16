@@ -587,11 +587,13 @@ func (c *ClanTracking) start() {
 		{{Key: "$match", Value: bson.D{}}},
 		{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$tag"}}}},
 	}
+	coll := c.statsMongoClient.Database("looper").Collection("all_clans")
 	for {
 		time.Sleep(2 * time.Second)
 
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-		cur, err := c.statsMongoClient.Database("looper").Collection("all_clans").Aggregate(ctx, pipeline)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cur, err := coll.Aggregate(ctx, pipeline)
+		cancel()
 		if err != nil {
 			continue
 		}
@@ -608,8 +610,9 @@ func (c *ClanTracking) start() {
 			batchTags = batchTags[:0]
 		}
 
-		cur.SetBatchSize(int32(c.batchSize))
-		for cur.Next(ctx) {
+		runCtx := context.Background()
+		cur.SetBatchSize(int32(1000))
+		for cur.Next(runCtx) {
 			var row tagGroup
 			if err := cur.Decode(&row); err != nil {
 				fmt.Println(err)
@@ -618,7 +621,7 @@ func (c *ClanTracking) start() {
 			batchTags = append(batchTags, row.ID)
 			index++
 
-			if (index+1)%c.batchSize == 0 {
+			if len(batchTags) >= c.batchSize {
 				runBatch()
 			}
 		}
@@ -629,8 +632,7 @@ func (c *ClanTracking) start() {
 		fmt.Println("num tags processed:", index)
 		index = 0
 
-		_ = cur.Close(ctx)
-		cancel()
+		_ = cur.Close(runCtx)
 		if err := cur.Err(); err != nil {
 			fmt.Println("cursor err:", err)
 		}
