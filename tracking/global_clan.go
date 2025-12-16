@@ -28,7 +28,7 @@ func createMongoClient(uri string) *mongo.Client {
 	// Uses the SetServerAPIOptions() method to set the Stable API version to 1
 	serverAPI := options.ServerAPI(options.ServerAPIVersion1)
 	// Defines the options for the MongoDB client
-	opts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPI)
+	opts := options.Client().ApplyURI(uri).SetServerAPIOptions(serverAPI).SetCompressors([]string{"snappy"})
 	// Creates a new client and connects to the server
 	client, err := mongo.Connect(opts)
 	if err != nil {
@@ -295,33 +295,6 @@ func clanDiff(oldClan, newClan Clan) bson.M {
 	return toSet
 }
 
-func (c *ClanTracking) getClanTags() ([]string, error) {
-	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.D{}}},
-		{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$tag"}}}},
-	}
-
-	cur, err := c.statsMongoClient.Database("looper").Collection("all_clans").Aggregate(context.TODO(), pipeline)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = cur.Close(context.TODO()) }()
-
-	tags := make([]string, 0, 1500000)
-	for cur.Next(context.TODO()) {
-		var row tagGroup
-		if err := cur.Decode(&row); err != nil {
-			return nil, err
-		}
-		tags = append(tags, row.ID)
-	}
-	if err := cur.Err(); err != nil {
-		return nil, err
-	}
-
-	return tags, nil
-}
-
 func (c *ClanTracking) getClans(tags []string) {
 
 	//if we end up with a queue as large as the batch size, wait for it to clear
@@ -379,8 +352,8 @@ func (c *ClanTracking) getClans(tags []string) {
 
 	var wg sync.WaitGroup
 	for cursor.Next(context.TODO()) {
-		var doc ClanDoc
-		if err := cursor.Decode(&doc); err != nil {
+		doc := new(ClanDoc)
+		if err := cursor.Decode(doc); err != nil {
 			continue
 		}
 		tag := doc.Data.Tag
@@ -388,7 +361,7 @@ func (c *ClanTracking) getClans(tags []string) {
 		docCopy := doc
 
 		wg.Add(1)
-		go func(d Clan, r Records, t string) {
+		go func(doc *ClanDoc, t string) {
 			defer wg.Done()
 
 			sem <- struct{}{}
@@ -397,11 +370,11 @@ func (c *ClanTracking) getClans(tags []string) {
 			newClan := getClan(t)
 
 			c.results <- Result{
-				OldClan:    &d,
-				OldRecords: &r,
+				OldClan:    &docCopy.Data,
+				OldRecords: &docCopy.Records,
 				NewClan:    &newClan,
 			}
-		}(docCopy.Data, docCopy.Records, tag)
+		}(doc, tag)
 	}
 
 	for _, tag := range tags {
@@ -440,46 +413,38 @@ func (c *ClanTracking) handleResults() {
 
 	const maxBatch = 1000
 	ctx := context.TODO()
-	clansWrite := make([]mongo.WriteModel, 0, 1000)
-	clanChangesWrite := make([]mongo.WriteModel, 0, 1000)
-	joinLeaveWrite := make([]mongo.WriteModel, 0, 5000)
-	playerStatsWrite := make([]mongo.WriteModel, 0, 5000)
+	clansWrite := make([]mongo.WriteModel, 0, 1250)
+	clanChangesWrite := make([]mongo.WriteModel, 0, 1250)
+	joinLeaveWrite := make([]mongo.WriteModel, 0, 1250)
+	playerStatsWrite := make([]mongo.WriteModel, 0, 1250)
 
+	// do real season logic
 	season := time.Now().UTC().Format("2006-01")
 	priorityClans := map[string]struct{}{}
 	priorityPlayers := map[string]struct{}{}
 
 	flush := func() {
-		if len(clansWrite) == 0 {
-			return
-		}
-		flushStarted := time.Now()
-
 		var err error
-		if len(clansWrite) > 0 {
+		if len(clansWrite) >= maxBatch {
 			_, err = clans.BulkWrite(ctx, clansWrite, options.BulkWrite().SetOrdered(false))
+			clansWrite = clansWrite[:0]
 		}
-		if len(clanChangesWrite) > 0 {
+		if len(clanChangesWrite) >= maxBatch {
 			_, err = clanChanges.BulkWrite(ctx, clanChangesWrite, options.BulkWrite().SetOrdered(false))
-
+			clanChangesWrite = clanChangesWrite[:0]
 		}
-		if len(joinLeaveWrite) > 0 {
+		if len(joinLeaveWrite) >= maxBatch {
 			_, err = joinLeave.BulkWrite(ctx, joinLeaveWrite, options.BulkWrite().SetOrdered(false))
+			joinLeaveWrite = joinLeaveWrite[:0]
 		}
-		if len(playerStatsWrite) > 0 {
+		if len(playerStatsWrite) >= maxBatch {
 			_, err = playerStats.BulkWrite(ctx, playerStatsWrite, options.BulkWrite().SetOrdered(false))
+			playerStatsWrite = playerStatsWrite[:0]
 		}
-
 		if err != nil {
 			fmt.Println("mongo bulkwrite error:", err)
 		}
-		fmt.Printf("flush size=%d took=%s\n", len(clansWrite), time.Since(flushStarted))
-		fmt.Println("results in queue", len(c.results))
 
-		clansWrite = clansWrite[:0]
-		clanChangesWrite = clanChangesWrite[:0]
-		joinLeaveWrite = joinLeaveWrite[:0]
-		playerStatsWrite = playerStatsWrite[:0]
 	}
 
 	for result := range c.results {
@@ -608,38 +573,62 @@ func (c *ClanTracking) handleResults() {
 			"$set": toSet,
 		}
 		clansWrite = append(clansWrite, mongo.NewUpdateOneModel().SetFilter(filter).SetUpdate(update).SetUpsert(true))
-		if len(clansWrite) >= maxBatch {
-			flush()
-		}
+		flush()
 	}
 	flush()
 }
 
 func (c *ClanTracking) start() {
 	go c.handleResults()
+	batchTags := make([]string, 0, c.batchSize)
+	index := 0
+
 	for {
 		time.Sleep(2 * time.Second)
-		tags, _ := c.getClanTags()
-		fmt.Println("tags:", len(tags))
 
+		pipeline := mongo.Pipeline{
+			{{Key: "$match", Value: bson.D{}}},
+			{{Key: "$group", Value: bson.D{{Key: "_id", Value: "$tag"}}}},
+		}
+
+		cur, err := c.statsMongoClient.Database("looper").Collection("all_clans").Aggregate(context.TODO(), pipeline)
+		if err != nil {
+			continue
+		}
 		batchNum := 0
-		batchTags := make([]string, 0, c.batchSize)
-		totalTags := len(tags)
-		for index, tag := range tags {
-			batchTags = append(batchTags, tag)
-			if (index+1)%c.batchSize == 0 || index == totalTags-1 {
-				started := time.Now()
 
-				c.getClans(batchTags)
+		runBatch := func() {
+			batchNum++
+			started := time.Now()
+			c.getClans(batchTags)
+			dur := time.Since(started)
+			fmt.Printf("batch=%d size=%d took=%s rate=%.1f tags/s\n",
+				batchNum, len(batchTags), dur, float64(len(batchTags))/dur.Seconds(),
+			)
+			batchTags = batchTags[:0]
+		}
 
-				dur := time.Since(started)
+		cur.SetBatchSize(int32(c.batchSize))
+		for cur.Next(context.TODO()) {
+			var row tagGroup
+			if err := cur.Decode(&row); err != nil {
+				continue
+			}
+			batchTags = append(batchTags, row.ID)
+			index++
 
-				fmt.Printf("batch=%d size=%d took=%s rate=%.1f tags/s\n",
-					batchNum, len(batchTags), dur, float64(len(batchTags))/dur.Seconds(),
-				)
-				batchTags = batchTags[:0]
+			if (index+1)%c.batchSize == 0 {
+				runBatch()
 			}
 		}
+
+		if len(batchTags) > 0 {
+			runBatch()
+		}
+		fmt.Println("num tags processed:", index)
+		index = 0
+
+		_ = cur.Close(context.TODO())
 	}
 }
 
@@ -649,7 +638,7 @@ func RunGlobalClan() {
 		statsMongoClient:  createMongoClient(os.Getenv("STATS_MONGODB_URI")),
 		staticMongoClient: createMongoClient(os.Getenv("STATIC_MONGODB_URI")),
 		baseUrl:           baseURL,
-		batchSize:         10000,
+		batchSize:         5000,
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 			Transport: &http.Transport{
