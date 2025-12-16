@@ -100,7 +100,7 @@ func (c *ClanTracking) checkAPIHealth() bool {
 
 func (c *ClanTracking) startAPIHealthMonitor() {
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 		for {
 			healthy := c.checkAPIHealth()
@@ -111,6 +111,7 @@ func (c *ClanTracking) startAPIHealthMonitor() {
 					c.apiPauseCond.Broadcast()
 				}
 			} else {
+				fmt.Println("API health check failed, pausing API")
 				c.apiPaused = true
 			}
 			c.apiPauseMu.Unlock()
@@ -298,12 +299,12 @@ func clanDiff(oldClan, newClan Clan) bson.M {
 func (c *ClanTracking) getClans(tags []string) {
 
 	//if we end up with a queue as large as the batch size, wait for it to clear
-	if len(c.results) >= c.batchSize {
+	if len(c.results) >= c.batchSize*2 {
 		for len(c.results) >= 100 {
+			fmt.Println("waiting for queue to clear")
 			time.Sleep(1 * time.Second)
 		}
 	}
-
 	limiter := time.NewTicker(time.Second / 1000)
 	defer limiter.Stop()
 
@@ -611,7 +612,6 @@ func (c *ClanTracking) start() {
 		}
 
 		runCtx := context.Background()
-		cur.SetBatchSize(int32(1000))
 		for cur.Next(runCtx) {
 			var row tagGroup
 			if err := cur.Decode(&row); err != nil {
