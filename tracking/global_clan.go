@@ -638,7 +638,7 @@ func RunGlobalClan() {
 		statsMongoClient:  createMongoClient(os.Getenv("STATS_MONGODB_URI")),
 		staticMongoClient: createMongoClient(os.Getenv("STATIC_MONGODB_URI")),
 		baseUrl:           baseURL,
-		batchSize:         2500,
+		batchSize:         1250, //test smaller batch size
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 			Transport: &http.Transport{
